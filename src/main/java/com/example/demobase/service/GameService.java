@@ -30,53 +30,97 @@ public class GameService {
     private static final int MAX_INTENTOS = 7;
     private static final int PUNTOS_PALABRA_COMPLETA = 20;
     private static final int PUNTOS_POR_LETRA = 1;
-    
+
     @Transactional
     public GameResponseDTO startGame(Long playerId) {
-        GameResponseDTO response = new GameResponseDTO();
-        // TODO: Implementar el método startGame
-        // Validar que el jugador existe
-       
-        // Verificar si ya existe una partida en curso para este jugador y palabra
-        
-        // Marcar la palabra como utilizada
-       
-        // Crear nueva partida en curso
-        
-        return response;
+        Player player = playerRepository.findById(playerId)
+                .orElseThrow(() -> new RuntimeException("Jugador no encontrado con id: " + playerId));
+
+        Word word = wordRepository.findRandomWord()
+                .orElseThrow(() -> new RuntimeException("No hay palabras disponibles para jugar"));
+
+        Optional<GameInProgress> existingOpt =
+                gameInProgressRepository.findByJugadorAndPalabra(playerId, word.getId());
+
+        GameInProgress gameInProgress;
+
+        if (existingOpt.isPresent()) {
+
+            gameInProgress = existingOpt.get();
+        } else {
+            word.setUtilizada(true);
+            wordRepository.save(word);
+
+            gameInProgress = new GameInProgress();
+            gameInProgress.setJugador(player);
+            gameInProgress.setPalabra(word);
+            gameInProgress.setLetrasIntentadas("");
+            gameInProgress.setIntentosRestantes(MAX_INTENTOS);
+            gameInProgress.setFechaInicio(LocalDateTime.now());
+
+            gameInProgress = gameInProgressRepository.save(gameInProgress);
+        }
+
+        return buildResponseFromGameInProgress(gameInProgress);
     }
-    
+
     @Transactional
     public GameResponseDTO makeGuess(Long playerId, Character letra) {
-        GameResponseDTO response = new GameResponseDTO();
-        // TODO: Implementar el método makeGuess
-        // Validar que el jugador existe
+        Player player = playerRepository.findById(playerId)
+                .orElseThrow(() -> new RuntimeException("Jugador no encontrado con id: " + playerId));
 
-        // Convertir la letra a mayúscula
-        
-        // Buscar la partida en curso más reciente del jugador
-        
-        // Tomar la partida más reciente
-        
-        // Obtener letras ya intentadas
-        
-        // Verificar si la letra ya fue intentada
-        
-        // Agregar la nueva letra
-        
-        // Verificar si la letra está en la palabra
-        
-        // Decrementar intentos solo si la letra es incorrecta
-        
-        // Generar palabra oculta
-        
-        // Guardar el estado actualizado
-        
-        // Si el juego terminó, guardar en Game y eliminar de GameInProgress
-        
-        // Construir respuesta
-        
-        return response;
+        if (letra == null) {
+            throw new RuntimeException("La letra no puede ser null");
+        }
+
+        char guess = Character.toUpperCase(letra);
+
+        List<GameInProgress> gamesInProgress =
+                gameInProgressRepository.findByJugadorIdOrderByFechaInicioDesc(playerId);
+
+        if (gamesInProgress.isEmpty()) {
+            throw new RuntimeException("No hay partida en curso para este jugador con id: " + playerId);
+        }
+        GameInProgress gameInProgress = gamesInProgress.get(0);
+
+        String palabra = gameInProgress.getPalabra().getPalabra().toUpperCase();
+        Set<Character> letrasIntentadas = stringToCharSet(gameInProgress.getLetrasIntentadas());
+
+        if (letrasIntentadas.contains(guess)) {
+            return buildResponseFromGameInProgress(gameInProgress);
+        }
+
+        letrasIntentadas.add(guess);
+
+        if (palabra.indexOf(guess) < 0) {
+            int intentosRestantes = gameInProgress.getIntentosRestantes();
+            if (intentosRestantes > 0) {
+                gameInProgress.setIntentosRestantes(intentosRestantes - 1);
+            }
+        }
+
+        gameInProgress.setLetrasIntentadas(charSetToString(letrasIntentadas));
+
+        String palabraOculta = generateHiddenWord(palabra, letrasIntentadas);
+        boolean palabraCompleta = palabraOculta.equals(palabra);
+        int intentosRestantes = gameInProgress.getIntentosRestantes();
+
+        if (palabraCompleta || intentosRestantes == 0) {
+            int puntaje = calculateScore(palabra, letrasIntentadas, palabraCompleta, intentosRestantes);
+            saveGame(player, gameInProgress.getPalabra(), palabraCompleta, puntaje);
+            gameInProgressRepository.delete(gameInProgress);
+
+            GameResponseDTO response = new GameResponseDTO();
+            response.setPalabraOculta(palabraOculta);
+            response.setLetrasIntentadas(new ArrayList<>(letrasIntentadas));
+            response.setIntentosRestantes(intentosRestantes);
+            response.setPalabraCompleta(palabraCompleta);
+            response.setPuntajeAcumulado(puntaje);
+            return response;
+        }
+
+        gameInProgressRepository.save(gameInProgress);
+        return buildResponseFromGameInProgress(gameInProgress);
     }
     
     private GameResponseDTO buildResponseFromGameInProgress(GameInProgress gameInProgress) {
